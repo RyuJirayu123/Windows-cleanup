@@ -50,11 +50,11 @@ function Get-DriveInfo {
 # ============================================================
 # XAML UI DEFINITION
 # ============================================================
-[xml]$xaml = @"
+$xamlString = @'
 <Window
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="💿 Disk Cleanup Toolkit"
+    Title="&#x1F4BF; Disk Cleanup Toolkit"
     Width="820" Height="700"
     MinWidth="720" MinHeight="600"
     WindowStartupLocation="CenterScreen"
@@ -63,17 +63,17 @@ function Get-DriveInfo {
 
     <Window.Resources>
         <!-- Colors -->
-        <SolidColorBrush x:Key="BgDark"      Color="#12121A"/>
-        <SolidColorBrush x:Key="BgCard"      Color="#1E1E2E"/>
-        <SolidColorBrush x:Key="BgCardHover" Color="#252538"/>
-        <SolidColorBrush x:Key="AccentBlue"  Color="#4CC9F0"/>
-        <SolidColorBrush x:Key="AccentPurple"Color="#7C3AED"/>
-        <SolidColorBrush x:Key="AccentGreen" Color="#22C55E"/>
-        <SolidColorBrush x:Key="AccentOrange"Color="#F59E0B"/>
-        <SolidColorBrush x:Key="AccentRed"   Color="#EF4444"/>
-        <SolidColorBrush x:Key="TextPrimary" Color="#E2E8F0"/>
-        <SolidColorBrush x:Key="TextMuted"   Color="#64748B"/>
-        <SolidColorBrush x:Key="Border1"     Color="#2D2D44"/>
+        <SolidColorBrush x:Key="BgDark"       Color="#12121A"/>
+        <SolidColorBrush x:Key="BgCard"       Color="#1E1E2E"/>
+        <SolidColorBrush x:Key="BgCardHover"  Color="#252538"/>
+        <SolidColorBrush x:Key="AccentBlue"   Color="#4CC9F0"/>
+        <SolidColorBrush x:Key="AccentPurple" Color="#7C3AED"/>
+        <SolidColorBrush x:Key="AccentGreen"  Color="#22C55E"/>
+        <SolidColorBrush x:Key="AccentOrange" Color="#F59E0B"/>
+        <SolidColorBrush x:Key="AccentRed"    Color="#EF4444"/>
+        <SolidColorBrush x:Key="TextPrimary"  Color="#E2E8F0"/>
+        <SolidColorBrush x:Key="TextMuted"    Color="#64748B"/>
+        <SolidColorBrush x:Key="Border1"      Color="#2D2D44"/>
 
         <!-- Button Style: Primary -->
         <Style x:Key="BtnPrimary" TargetType="Button">
@@ -404,53 +404,26 @@ function Get-DriveInfo {
 
                 <ProgressBar x:Name="progressBar" Grid.Column="1"
                              Margin="20,0" Height="4" Minimum="0" Maximum="100" Value="0"
-                             Visibility="Collapsed">
-                    <ProgressBar.Foreground>
-                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                            <GradientStop Color="#4CC9F0" Offset="0"/>
-                            <GradientStop Color="#7C3AED" Offset="1"/>
-                        </LinearGradientBrush>
-                    </ProgressBar.Foreground>
-                    <ProgressBar.Style>
-                        <Style TargetType="ProgressBar">
-                            <Setter Property="Template">
-                                <Setter.Value>
-                                    <ControlTemplate TargetType="ProgressBar">
-                                        <Border CornerRadius="2" Background="#1E293B">
-                                            <Border x:Name="PART_Indicator" HorizontalAlignment="Left" CornerRadius="2">
-                                                <Border.Background>
-                                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                                        <GradientStop Color="#4CC9F0" Offset="0"/>
-                                                        <GradientStop Color="#7C3AED" Offset="1"/>
-                                                    </LinearGradientBrush>
-                                                </Border.Background>
-                                            </Border>
-                                        </Border>
-                                    </ControlTemplate>
-                                </Setter.Value>
-                            </Setter>
-                        </Style>
-                    </ProgressBar.Style>
-                </ProgressBar>
+                             Visibility="Collapsed"
+                             Foreground="#4CC9F0"/>
 
                 <Button x:Name="btnClose" Grid.Column="2"
-                        Content="✕  ปิดโปรแกรม"
+                        Content="  ปิดโปรแกรม"
                         Style="{StaticResource BtnSecondary}"
                         Padding="14,6"/>
             </Grid>
         </Border>
     </Grid>
 </Window>
-"@
+'@
 
 # ============================================================
 # LOAD WINDOW
 # ============================================================
 try {
-    $reader = New-Object System.Xml.XmlNodeReader $xaml
-    $window = [System.Windows.Markup.XamlReader]::Load($reader)
+    $window = [System.Windows.Markup.XamlReader]::Parse($xamlString)
 } catch {
-    [System.Windows.Forms.MessageBox]::Show("ไม่สามารถโหลด UI ได้: $_", "Error", "OK", "Error") | Out-Null
+    [System.Windows.Forms.MessageBox]::Show("ไม่สามารถโหลด UI ได้:`n$_", "Error", "OK", "Error") | Out-Null
     exit 1
 }
 
