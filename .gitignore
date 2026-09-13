@@ -1,0 +1,30 @@
+# Windows / System
+Thumbs.db
+Desktop.ini
+ehthumbs.db
+*.lnk
+
+# Logs
+*.log
+*.log.*
+
+# PowerShell temporary files
+*.psd1.bak
+*.psm1.bak
+
+# Editor config
+.vscode/
+.idea/
+*.suo
+*.user
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Temp / scratch
+scratch/
+tmp/
+*.tmp
+*.temp
