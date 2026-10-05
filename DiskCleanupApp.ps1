@@ -295,8 +295,12 @@ $xamlString = @'
                     </Grid>
                     <Border CornerRadius="4" Background="#0F172A" Height="12">
                         <Grid>
-                            <Border x:Name="driveProgressBar" HorizontalAlignment="Left"
-                                    CornerRadius="4" Height="12" Width="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition x:Name="driveUsedCol" Width="0*"/>
+                                <ColumnDefinition x:Name="driveFreeCol" Width="100*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="driveProgressBar" Grid.Column="0"
+                                    CornerRadius="4" Height="12" MinWidth="6">
                                 <Border.Background>
                                     <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
                                         <GradientStop Color="#4CC9F0" Offset="0"/>
@@ -527,7 +531,8 @@ $outputBox          = $window.FindName("outputBox")
 $txtStatus          = $window.FindName("txtStatus")
 $statusDot          = $window.FindName("statusDot")
 $progressBar        = $window.FindName("progressBar")
-$driveProgressBar   = $window.FindName("driveProgressBar")
+$driveUsedCol       = $window.FindName("driveUsedCol")
+$driveFreeCol       = $window.FindName("driveFreeCol")
 $txtDriveLabel      = $window.FindName("txtDriveLabel")
 $txtDrivePct        = $window.FindName("txtDrivePct")
 $txtDriveUsed       = $window.FindName("txtDriveUsed")
@@ -627,10 +632,9 @@ function Update-DriveInfo {
             $txtDrivePct.Foreground = [System.Windows.Media.Brushes]::Gold
         }
 
-        # Compute width of bar (max parent width ~ 260px)
-        $parentWidth = 260
-        $barWidth = [math]::Max(6, [math]::Round(($info.UsedPct / 100) * $parentWidth, 0))
-        $driveProgressBar.Width = $barWidth
+        # แบ่งสัดส่วนคอลัมน์ used/free แบบ star — ปรับตามความกว้างจริงของแถบอัตโนมัติ
+        $driveUsedCol.Width = New-Object System.Windows.GridLength($info.UsedPct, 'Star')
+        $driveFreeCol.Width = New-Object System.Windows.GridLength((100 - $info.UsedPct), 'Star')
     })
 }
 
