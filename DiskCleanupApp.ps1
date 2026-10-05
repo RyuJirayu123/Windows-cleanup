@@ -87,6 +87,49 @@ function Invoke-CacheCleanup {
     return @{ Found = $true; SavedGB = $saved; Deleted = $r.Deleted; Locked = $r.Locked }
 }
 
+# อ่านรายการไดรเวอร์จาก pnputil แล้วจัดกลุ่มไดรเวอร์ที่ซ้ำกัน
+# ซ้ำ = Original Name + Provider + Class เดียวกัน, เก็บตัวใหม่สุด (Version ก่อน แล้วค่อย Date)
+function Get-DuplicateDrivers {
+    $raw    = pnputil.exe /enum-drivers 2>&1
+    $blocks = ($raw -join "`n") -split "(?=Published Name\s*:)" | Where-Object { $_ -match "Published Name" }
+    $drivers = foreach ($b in $blocks) {
+        $f = @{}
+        foreach ($line in $b -split "`n") {
+            if ($line -match '^\s*([^:]+?)\s*:\s*(.*?)\s*$') { $f[$Matches[1]] = $Matches[2] }
+        }
+        if (-not ($f['Published Name'] -and $f['Original Name'])) { continue }
+
+        $date = [datetime]::MinValue; $ver = [version]'0.0'
+        if ($f['Driver Version'] -match '^(\d{2}/\d{2}/\d{4})\s+(\S+)') {
+            try { $date = [datetime]::ParseExact($Matches[1], "MM/dd/yyyy", $null) } catch {}
+            try { $ver  = [version]$Matches[2] } catch {}
+        }
+        [PSCustomObject]@{
+            Published = $f['Published Name']
+            Original  = $f['Original Name']
+            Provider  = $f['Provider Name']
+            Class     = $f['Class Name']
+            Version   = $ver
+            Date      = $date
+        }
+    }
+    $drivers = @($drivers)
+
+    $groups = foreach ($g in ($drivers | Group-Object Original, Provider, Class | Where-Object { $_.Count -gt 1 })) {
+        $sorted = @($g.Group | Sort-Object Version, Date -Descending)
+        [PSCustomObject]@{
+            Original = $sorted[0].Original
+            Keep     = $sorted[0]
+            Remove   = @($sorted | Select-Object -Skip 1)
+        }
+    }
+    return [PSCustomObject]@{
+        Parsed = $drivers.Count
+        Raw    = @($raw).Count
+        Groups = @($groups)
+    }
+}
+
 function Get-DriveInfo {
     $drive = Get-PSDrive -Name C -ErrorAction SilentlyContinue
     if ($null -eq $drive) { return @{ TotalGB = 0; UsedGB = 0; FreeGB = 0; UsedPct = 0 } }
@@ -811,20 +854,15 @@ $btnCheckDriver.Add_Click({
 
     Write-Log "" 
     Write-Log "กำลังวิเคราะห์ไดรเวอร์ซ้ำ..." "#64748B"
-    $raw    = pnputil.exe /enum-drivers 2>&1
-    $blocks = ($raw -join "`n") -split "(?=Published Name\s*:)" | Where-Object { $_ -match "Published Name" }
-    $drivers = foreach ($b in $blocks) {
-        $pub = if ($b -match "Published Name\s*:\s*(\S+)") { $Matches[1] } else { $null }
-        $orig = if ($b -match "Original Name\s*:\s*(\S+)") { $Matches[1] } else { $null }
-        if ($pub -and $orig) { [PSCustomObject]@{ Published = $pub; Original = $orig } }
-    }
-    $groups = $drivers | Group-Object Original | Where-Object { $_.Count -gt 1 }
-    if ($groups.Count -eq 0) {
+    $dup = Get-DuplicateDrivers
+    if ($dup.Parsed -eq 0 -and $dup.Raw -gt 5) {
+        Write-Log "⚠️  อ่าน output ของ pnputil ไม่ได้ (Windows ภาษานี้อาจยังไม่รองรับ)" "#F59E0B"
+    } elseif ($dup.Groups.Count -eq 0) {
         Write-Log "✅ ไม่พบไดรเวอร์ซ้ำ" "#22C55E"
     } else {
-        Write-Log "⚠️  พบไดรเวอร์ซ้ำ $($groups.Count) กลุ่ม สามารถกด 'ลบไดรเวอร์ซ้ำ' เพื่อล้าง" "#F59E0B"
-        foreach ($g in $groups) {
-            Write-Log "  • $($g.Name): $($g.Count) เวอร์ชัน (เก็บ 1 ลบ $($g.Count - 1))" "#94A3B8"
+        Write-Log "⚠️  พบไดรเวอร์ซ้ำ $($dup.Groups.Count) กลุ่ม สามารถกด 'ลบไดรเวอร์ซ้ำ' เพื่อล้าง" "#F59E0B"
+        foreach ($g in $dup.Groups) {
+            Write-Log "  • $($g.Original): เก็บ v$($g.Keep.Version) ($($g.Keep.Published)), ลบได้ $($g.Remove.Count) เวอร์ชันเก่า" "#94A3B8"
         }
     }
 
@@ -841,35 +879,22 @@ $btnCleanDriver.Add_Click({
     Clear-Log
     Write-LogSection "ลบไดรเวอร์เก่าที่ซ้ำกัน"
 
-    $raw    = pnputil.exe /enum-drivers 2>&1
-    $blocks = ($raw -join "`n") -split "(?=Published Name\s*:)" | Where-Object { $_ -match "Published Name" }
-    $drivers = foreach ($b in $blocks) {
-        $pub  = if ($b -match "Published Name\s*:\s*(\S+)") { $Matches[1] } else { $null }
-        $orig = if ($b -match "Original Name\s*:\s*(\S+)") { $Matches[1] } else { $null }
-        $verLine = if ($b -match "Driver Version\s*:\s*(.+)") { $Matches[1].Trim() } else { $null }
-        $dateObj = [datetime]::MinValue
-        if ($verLine -match "^(\d{2}/\d{2}/\d{4})\s+(.+)$") {
-            try { $dateObj = [datetime]::ParseExact($Matches[1], "MM/dd/yyyy", $null) } catch {}
-        }
-        if ($pub -and $orig) { [PSCustomObject]@{ Published = $pub; Original = $orig; Date = $dateObj } }
-    }
-    $groups = $drivers | Group-Object Original | Where-Object { $_.Count -gt 1 }
-    if ($groups.Count -eq 0) {
+    $dup = Get-DuplicateDrivers
+    if ($dup.Groups.Count -eq 0) {
         Write-Log "✅ ไม่พบไดรเวอร์ซ้ำ ไม่มีอะไรให้ลบ" "#22C55E"
         Set-AllButtons $true
         Set-Status "ไม่มีไดรเวอร์ซ้ำ" "Green" $false
         return
     }
 
-    $toDelete = @()
-    foreach ($g in $groups) {
-        $sorted   = $g.Group | Sort-Object Date -Descending
-        $toDelete += $sorted[1..($sorted.Count - 1)]
-    }
+    $toDelete = @($dup.Groups | ForEach-Object { $_.Remove })
     Write-Log "พบไดรเวอร์เก่าซ้ำ $($toDelete.Count) ตัวที่สามารถลบได้" "#F59E0B"
+    foreach ($d in $toDelete) {
+        Write-Log "  • $($d.Published)  $($d.Original)  v$($d.Version)" "#94A3B8"
+    }
 
     $confirm = [System.Windows.MessageBox]::Show(
-        "พบไดรเวอร์เก่าซ้ำ $($toDelete.Count) ตัว`nต้องการลบเลยไหม?`n`n⚠️  แนะนำให้ Backup ก่อนหากไม่แน่ใจ",
+        "พบไดรเวอร์เก่าซ้ำ $($toDelete.Count) ตัว`nต้องการลบเลยไหม?`n`nไดรเวอร์ที่อุปกรณ์ยังใช้งานอยู่จะถูกข้ามโดยอัตโนมัติ`n⚠️  แนะนำให้สร้าง Restore Point ก่อนหากไม่แน่ใจ",
         "ยืนยันการลบไดรเวอร์",
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Warning)
@@ -879,19 +904,21 @@ $btnCleanDriver.Add_Click({
         return
     }
 
-    $ok = 0; $fail = 0
+    # ไม่ใช้ /uninstall /force — pnputil จะปฏิเสธการลบไดรเวอร์ที่อุปกรณ์ยังใช้อยู่เอง
+    $ok = 0; $skipped = 0
     foreach ($d in $toDelete) {
-        $r = pnputil.exe /delete-driver $d.Published /uninstall /force 2>&1
+        $out = pnputil.exe /delete-driver $d.Published 2>&1
         if ($LASTEXITCODE -eq 0) {
-            Write-Log "✅ ลบแล้ว: $($d.Published) ($($d.Original))" "#22C55E"
+            Write-Log "✅ ลบแล้ว: $($d.Published) ($($d.Original) v$($d.Version))" "#22C55E"
             $ok++
         } else {
-            Write-Log "❌ ล้มเหลว: $($d.Published)" "#EF4444"
-            $fail++
+            $reason = ($out | Where-Object { "$_".Trim() } | Select-Object -Last 1)
+            Write-Log "⏭  เก็บไว้: $($d.Published) — $reason" "#64748B"
+            $skipped++
         }
     }
     Write-Log ""
-    Write-Log "📋 สรุป: สำเร็จ $ok  |  ล้มเหลว $fail" "#4CC9F0"
+    Write-Log "📋 สรุป: ลบแล้ว $ok  |  ข้าม (ยังใช้งานอยู่) $skipped" "#4CC9F0"
     Write-Log "💡 แนะนำให้รีสตาร์ทเครื่องหลังจากลบไดรเวอร์" "#F59E0B"
 
     Set-AllButtons $true
