@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 :: OpenDiskCleanupApp.bat
 :: ดับเบิลคลิกไฟล์นี้ได้เลย - จะขอสิทธิ์ Admin อัตโนมัติแล้วเปิดโปรแกรมให้
 

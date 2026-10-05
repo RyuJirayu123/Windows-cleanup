@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     DiskCleanupApp.ps1 — Modern WPF Dashboard สำหรับทำความสะอาดดิสก์
     ต้องรันแบบ Administrator
