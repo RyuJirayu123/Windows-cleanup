@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     CreateShortcut.ps1
     สร้าง Shortcut บน Desktop พร้อมไอคอน Custom และ Run as Administrator
