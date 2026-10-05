@@ -17,12 +17,19 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
-    [System.Windows.MessageBox]::Show(
-        "กรุณาเปิดโปรแกรมแบบ `"Run as Administrator`" ก่อนครับ",
-        "ต้องใช้สิทธิ์ Admin",
-        [System.Windows.MessageBoxButton]::OK,
-        [System.Windows.MessageBoxImage]::Warning) | Out-Null
-    exit 1
+    # เปิดตัวเองใหม่แบบ Admin (Windows จะถาม UAC) แล้วปิดตัวที่ไม่มีสิทธิ์
+    try {
+        Start-Process -FilePath "powershell.exe" -Verb RunAs -WindowStyle Hidden -ErrorAction Stop `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PSCommandPath`""
+        exit 0
+    } catch {
+        [System.Windows.MessageBox]::Show(
+            "โปรแกรมนี้ต้องใช้สิทธิ์ Administrator`nกรุณากด `"Yes`" เมื่อ Windows ถามสิทธิ์ครับ",
+            "ต้องใช้สิทธิ์ Admin",
+            [System.Windows.MessageBoxButton]::OK,
+            [System.Windows.MessageBoxImage]::Warning) | Out-Null
+        exit 1
+    }
 }
 
 # ============================================================
