@@ -30,11 +30,61 @@ if (-not $isAdmin) {
 # ============================================================
 function Get-FolderSizeGB {
     param([string]$Path)
-    if (-not (Test-Path $Path)) { return 0 }
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
     $bytes = (Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
               Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
     if ($null -eq $bytes) { return 0 }
     return [math]::Round($bytes / 1GB, 2)
+}
+
+# ลบทุกอย่างภายในโฟลเดอร์ (แต่เก็บตัวโฟลเดอร์ไว้) ทีละรายการ
+# ไฟล์ที่ถูกล็อกจะถูกข้ามและนับเป็น Locked แทนที่จะทำให้ทั้งโฟลเดอร์ล้มเหลว
+function Remove-FolderContents {
+    param([string]$Path)
+    $deleted = 0; $locked = 0
+    foreach ($item in Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue) {
+        try {
+            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
+            $deleted++
+        } catch {
+            if ($item.PSIsContainer) {
+                # ลบไฟล์ข้างในที่ลบได้ ปล่อยไฟล์ที่ล็อกไว้
+                Get-ChildItem -LiteralPath $item.FullName -Recurse -Force -File -ErrorAction SilentlyContinue | ForEach-Object {
+                    try { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop; $deleted++ } catch { $locked++ }
+                }
+            } else {
+                $locked++
+            }
+        }
+    }
+    return @{ Deleted = $deleted; Locked = $locked }
+}
+
+# ล้าง Cache 1 รายการ: หยุด Service ที่ล็อกไฟล์ (ถ้ามี) → ลบ → เปิด Service คืน
+function Invoke-CacheCleanup {
+    param([hashtable]$Target)
+    if (-not (Test-Path -LiteralPath $Target.Path)) {
+        return @{ Found = $false; SavedGB = 0; Deleted = 0; Locked = 0 }
+    }
+    $sizeBefore = Get-FolderSizeGB $Target.Path
+
+    $stopped = @()
+    foreach ($svcName in @($Target.Services)) {
+        if (-not $svcName) { continue }
+        $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq 'Running') {
+            Stop-Service -Name $svcName -Force -ErrorAction SilentlyContinue
+            $stopped += $svcName
+        }
+    }
+    try {
+        $r = Remove-FolderContents -Path $Target.Path
+    } finally {
+        foreach ($svcName in $stopped) { Start-Service -Name $svcName -ErrorAction SilentlyContinue }
+    }
+
+    $saved = [math]::Round([math]::Max(0, $sizeBefore - (Get-FolderSizeGB $Target.Path)), 2)
+    return @{ Found = $true; SavedGB = $saved; Deleted = $r.Deleted; Locked = $r.Locked }
 }
 
 function Get-DriveInfo {
@@ -552,8 +602,19 @@ $allCacheTargets = @(
     @{ Name = "AMD DirectX Cache";    Path = "C:\ProgramData\AMD\DxCache";                         Chk = $chkAmdCache }
     @{ Name = "Windows Temp";         Path = "$env:WINDIR\Temp";                                   Chk = $chkWindowsTemp }
     @{ Name = "User Temp";            Path = "$env:TEMP";                                          Chk = $chkUserTemp }
-    @{ Name = "Windows Update Cache"; Path = "$env:WINDIR\SoftwareDistribution\Download";          Chk = $chkWinUpdate }
+    @{ Name = "Windows Update Cache"; Path = "$env:WINDIR\SoftwareDistribution\Download";          Chk = $chkWinUpdate; Services = @("wuauserv", "bits") }
 )
+
+function Write-CleanupResult {
+    param([string]$Name, [hashtable]$Result)
+    if (-not $Result.Found) {
+        Write-Log "⏭  ข้ามไป (ไม่พบโฟลเดอร์): $Name" "#334155"
+    } elseif ($Result.Locked -gt 0) {
+        Write-Log "⚠️  $Name — ประหยัดได้ $($Result.SavedGB) GB (ข้ามไฟล์ที่ถูกใช้งานอยู่ $($Result.Locked) ไฟล์)" "#F59E0B"
+    } else {
+        Write-Log "✅ $Name — ประหยัดได้ $($Result.SavedGB) GB" "#22C55E"
+    }
+}
 
 $scanOnlyTargets = @(
     @{ Name = "Steam Shader Cache";   Path = "C:\Program Files (x86)\Steam\steamapps\shadercache" }
@@ -602,7 +663,7 @@ $btnScanAll.Add_Click({
 # ACTION: Clean Selected
 # ============================================================
 $btnCleanSelected.Add_Click({
-    $selected = $allCacheTargets | Where-Object { $_.Chk.IsChecked -eq $true }
+    $selected = @($allCacheTargets | Where-Object { $_.Chk.IsChecked -eq $true })
     if ($selected.Count -eq 0) {
         [System.Windows.MessageBox]::Show("กรุณาเลือกอย่างน้อย 1 รายการก่อนครับ", "แจ้งเตือน",
             [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
@@ -621,23 +682,19 @@ $btnCleanSelected.Add_Click({
     Clear-Log
     Write-LogSection "ล้าง Cache ที่เลือก"
 
-    $ok = 0; $fail = 0
+    $totalSaved = 0.0; $totalLocked = 0
     foreach ($t in $selected) {
-        if (Test-Path $t.Path) {
-            try {
-                Remove-Item -LiteralPath "$($t.Path)\*" -Recurse -Force -ErrorAction SilentlyContinue
-                Write-Log "✅ ลบแล้ว: $($t.Name)" "#22C55E"
-                $ok++
-            } catch {
-                Write-Log "❌ ลบไม่สำเร็จ: $($t.Name) — $_" "#EF4444"
-                $fail++
-            }
-        } else {
-            Write-Log "⏭  ข้ามไป (ไม่พบโฟลเดอร์): $($t.Name)" "#334155"
-        }
+        Set-Status "กำลังล้าง $($t.Name)..." "Orange" $true
+        $r = Invoke-CacheCleanup -Target $t
+        Write-CleanupResult -Name $t.Name -Result $r
+        $totalSaved  += $r.SavedGB
+        $totalLocked += $r.Locked
     }
     Write-Log ""
-    Write-Log "📋 สรุป: สำเร็จ $ok รายการ  |  ล้มเหลว $fail รายการ" "#4CC9F0"
+    Write-Log "📋 สรุป: ประหยัดพื้นที่รวม ~$([math]::Round($totalSaved, 2)) GB" "#4CC9F0"
+    if ($totalLocked -gt 0) {
+        Write-Log "💡 มี $totalLocked ไฟล์ที่ถูกโปรแกรมอื่นใช้งานอยู่ — ปิดโปรแกรมหรือรีสตาร์ทแล้วลองใหม่" "#94A3B8"
+    }
 
     Set-AllButtons $true
     Set-Status "ล้าง Cache เสร็จแล้ว" "Green" $false
@@ -664,25 +721,13 @@ $btnQuickClean.Add_Click({
     $quickPaths = @(
         @{ Name = "Windows Temp"; Path = "$env:WINDIR\Temp" }
         @{ Name = "User Temp";    Path = "$env:TEMP" }
-        @{ Name = "Update Cache"; Path = "$env:WINDIR\SoftwareDistribution\Download" }
+        @{ Name = "Update Cache"; Path = "$env:WINDIR\SoftwareDistribution\Download"; Services = @("wuauserv", "bits") }
     )
-    $ok = 0; $fail = 0; $totalSaved = 0.0
+    $totalSaved = 0.0
     foreach ($t in $quickPaths) {
-        if (Test-Path $t.Path) {
-            $sizeBefore = Get-FolderSizeGB $t.Path
-            try {
-                Remove-Item -LiteralPath "$($t.Path)\*" -Recurse -Force -ErrorAction SilentlyContinue
-                $saved = [math]::Round($sizeBefore - (Get-FolderSizeGB $t.Path), 2)
-                $totalSaved += $saved
-                Write-Log "✅ $($t.Name) — ประหยัดได้ $saved GB" "#22C55E"
-                $ok++
-            } catch {
-                Write-Log "❌ $($t.Name) ล้มเหลว: $_" "#EF4444"
-                $fail++
-            }
-        } else {
-            Write-Log "⏭  ข้าม (ไม่พบ): $($t.Name)" "#334155"
-        }
+        $r = Invoke-CacheCleanup -Target $t
+        Write-CleanupResult -Name $t.Name -Result $r
+        $totalSaved += $r.SavedGB
     }
     Write-Log ""
     Write-Log "🎉 Quick Clean เสร็จสิ้น! ประหยัดพื้นที่รวม ~$([math]::Round($totalSaved,2)) GB" "#4CC9F0"
@@ -900,11 +945,14 @@ $btnCleanWindowsOld.Add_Click({
     takeown /F $path /R /D Y 2>&1 | Out-Null
     icacls $path /grant Administrators:F /T /C 2>&1 | Out-Null
 
-    try {
-        Remove-Item $path -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Log "กำลังลบไฟล์... (อาจใช้เวลาหลายนาที)" "#64748B"
+    Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+
+    if (-not (Test-Path -LiteralPath $path)) {
         Write-Log "✅ ลบ Windows.old เสร็จสิ้น — ประหยัดได้ ~$size GB" "#22C55E"
-    } catch {
-        Write-Log "⚠️  บางไฟล์อาจยังเหลืออยู่: $_" "#F59E0B"
+    } else {
+        $left = Get-FolderSizeGB $path
+        Write-Log "⚠️  ลบได้บางส่วน — ยังเหลืออยู่ $left GB (ประหยัดได้ ~$([math]::Round($size - $left, 2)) GB)" "#F59E0B"
         Write-Log "💡 ลองใช้ Disk Cleanup (cleanmgr) เพื่อลบ Previous Windows Installation แทน" "#94A3B8"
     }
 
