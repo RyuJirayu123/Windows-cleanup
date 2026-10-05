@@ -30,7 +30,7 @@ if (-not $isAdmin) {
 # ============================================================
 function Get-FolderSizeGB {
     param([string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+    if (-not (Test-Path -LiteralPath $Path -ErrorAction SilentlyContinue)) { return 0 }
     $bytes = (Get-ChildItem -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue |
               Measure-Object -Property Length -Sum -ErrorAction SilentlyContinue).Sum
     if ($null -eq $bytes) { return 0 }
@@ -60,13 +60,23 @@ function Remove-FolderContents {
     return @{ Deleted = $deleted; Locked = $locked }
 }
 
+# ขนาดรวมของทุก Path ใน Target (Path ที่ไม่มีอยู่นับเป็น 0)
+function Get-TargetSizeGB {
+    param([hashtable]$Target)
+    $sum = 0.0
+    foreach ($p in @($Target.Paths)) { $sum += Get-FolderSizeGB $p }
+    return [math]::Round($sum, 2)
+}
+
 # ล้าง Cache 1 รายการ: หยุด Service ที่ล็อกไฟล์ (ถ้ามี) → ลบ → เปิด Service คืน
+# Target = @{ Paths = @(...); Services = @(...); Clean = { ... } (ไม่บังคับ — ใช้แทนการลบไฟล์ปกติ) }
 function Invoke-CacheCleanup {
     param([hashtable]$Target)
-    if (-not (Test-Path -LiteralPath $Target.Path)) {
+    $existing = @(@($Target.Paths) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -ErrorAction SilentlyContinue) })
+    if ($existing.Count -eq 0) {
         return @{ Found = $false; SavedGB = 0; Deleted = 0; Locked = 0 }
     }
-    $sizeBefore = Get-FolderSizeGB $Target.Path
+    $sizeBefore = Get-TargetSizeGB $Target
 
     $stopped = @()
     foreach ($svcName in @($Target.Services)) {
@@ -77,14 +87,43 @@ function Invoke-CacheCleanup {
             $stopped += $svcName
         }
     }
+    $deleted = 0; $locked = 0
     try {
-        $r = Remove-FolderContents -Path $Target.Path
+        if ($Target.Clean) {
+            & $Target.Clean
+        } else {
+            foreach ($p in $existing) {
+                $r = Remove-FolderContents -Path $p
+                $deleted += $r.Deleted; $locked += $r.Locked
+            }
+        }
     } finally {
         foreach ($svcName in $stopped) { Start-Service -Name $svcName -ErrorAction SilentlyContinue }
     }
 
-    $saved = [math]::Round([math]::Max(0, $sizeBefore - (Get-FolderSizeGB $Target.Path)), 2)
-    return @{ Found = $true; SavedGB = $saved; Deleted = $r.Deleted; Locked = $r.Locked }
+    $saved = [math]::Round([math]::Max(0, $sizeBefore - (Get-TargetSizeGB $Target)), 2)
+    return @{ Found = $true; SavedGB = $saved; Deleted = $deleted; Locked = $locked }
+}
+
+# หาโฟลเดอร์ติดตั้ง Steam (จาก Registry) และ Library ทั้งหมด (จาก libraryfolders.vdf)
+# คืนค่า: @{ Root = "<Steam>"; Libraries = @("<Steam>", "D:\SteamLibrary", ...) }
+function Get-SteamLibraries {
+    $root = $null
+    try { $root = (Get-ItemProperty -Path "HKCU:\Software\Valve\Steam" -Name SteamPath -ErrorAction Stop).SteamPath } catch {}
+    if (-not $root) {
+        try { $root = (Get-ItemProperty -Path "HKLM:\SOFTWARE\WOW6432Node\Valve\Steam" -Name InstallPath -ErrorAction Stop).InstallPath } catch {}
+    }
+    if (-not $root) { $root = "${env:ProgramFiles(x86)}\Steam" }
+    $root = $root -replace '/', '\'
+
+    $libs = @($root)
+    $vdf  = Join-Path $root "steamapps\libraryfolders.vdf"
+    if (Test-Path -LiteralPath $vdf) {
+        foreach ($m in [regex]::Matches((Get-Content -LiteralPath $vdf -Raw -ErrorAction SilentlyContinue), '"path"\s+"([^"]+)"')) {
+            $libs += $m.Groups[1].Value -replace '\\\\', '\'
+        }
+    }
+    return @{ Root = $root; Libraries = @($libs | Sort-Object -Unique) }
 }
 
 # อ่านรายการไดรเวอร์จาก pnputil แล้วจัดกลุ่มไดรเวอร์ที่ซ้ำกัน
@@ -370,14 +409,8 @@ $xamlString = @'
                                                    FontSize="11" Foreground="#64748B"/>
                                     </StackPanel>
                                 </StackPanel>
-                                <CheckBox x:Name="chkWindowsTemp"  Content="🗂  Windows Temp (%WINDIR%\Temp)" IsChecked="True"/>
-                                <CheckBox x:Name="chkUserTemp"     Content="📁  User Temp (%TEMP%)" IsChecked="True"/>
-                                <CheckBox x:Name="chkWinUpdate"    Content="🔄  Windows Update Download Cache" IsChecked="True"/>
-                                <CheckBox x:Name="chkSteamShader"  Content="🎮  Steam Shader Cache" IsChecked="False"/>
-                                <CheckBox x:Name="chkSteamDl"      Content="⬇  Steam Downloading Cache" IsChecked="False"/>
-                                <CheckBox x:Name="chkSteamHtml"    Content="🌐  Steam HTML Cache" IsChecked="False"/>
-                                <CheckBox x:Name="chkNvidiaCache"  Content="🟢  NVIDIA Shader Cache" IsChecked="False"/>
-                                <CheckBox x:Name="chkAmdCache"     Content="🔴  AMD DirectX Cache" IsChecked="False"/>
+                                <!-- CheckBox สร้างจาก $cacheTargets ในโค้ด -->
+                                <StackPanel x:Name="pnlCacheTargets"/>
                                 <Separator Background="#2D2D44" Margin="0,10"/>
                                 <Button x:Name="btnCleanSelected" Content="🧹  ล้างที่เลือก"
                                         Style="{StaticResource BtnSuccess}"
@@ -553,14 +586,7 @@ $btnClearLog        = $window.FindName("btnClearLog")
 $btnClose           = $window.FindName("btnClose")
 
 # Checkboxes
-$chkWindowsTemp     = $window.FindName("chkWindowsTemp")
-$chkUserTemp        = $window.FindName("chkUserTemp")
-$chkWinUpdate       = $window.FindName("chkWinUpdate")
-$chkSteamShader     = $window.FindName("chkSteamShader")
-$chkSteamDl         = $window.FindName("chkSteamDl")
-$chkSteamHtml       = $window.FindName("chkSteamHtml")
-$chkNvidiaCache     = $window.FindName("chkNvidiaCache")
-$chkAmdCache        = $window.FindName("chkAmdCache")
+$pnlCacheTargets    = $window.FindName("pnlCacheTargets")
 
 # ============================================================
 # UI HELPER FUNCTIONS
@@ -703,16 +729,52 @@ function Update-DriveInfo {
 # ============================================================
 # CLEAN TARGETS MAP
 # ============================================================
-$allCacheTargets = @(
-    @{ Name = "Steam Shader Cache";   Path = "C:\Program Files (x86)\Steam\steamapps\shadercache"; Chk = $chkSteamShader }
-    @{ Name = "Steam Download Cache"; Path = "C:\Program Files (x86)\Steam\steamapps\downloading"; Chk = $chkSteamDl }
-    @{ Name = "Steam HTML Cache";     Path = "$env:LOCALAPPDATA\Steam\htmlcache";                  Chk = $chkSteamHtml }
-    @{ Name = "NVIDIA Shader Cache";  Path = "C:\ProgramData\NVIDIA Corporation\NV_Cache";         Chk = $chkNvidiaCache }
-    @{ Name = "AMD DirectX Cache";    Path = "C:\ProgramData\AMD\DxCache";                         Chk = $chkAmdCache }
-    @{ Name = "Windows Temp";         Path = "$env:WINDIR\Temp";                                   Chk = $chkWindowsTemp }
-    @{ Name = "User Temp";            Path = "$env:TEMP";                                          Chk = $chkUserTemp }
-    @{ Name = "Windows Update Cache"; Path = "$env:WINDIR\SoftwareDistribution\Download";          Chk = $chkWinUpdate; Services = @("wuauserv", "bits") }
+# เพิ่มรายการใหม่ได้ที่นี่ที่เดียว — CheckBox, การสแกน และการล้างจะใช้ตารางนี้ทั้งหมด
+#   Paths    : โฟลเดอร์ (ลบเนื้อหาข้างใน) หรือไฟล์ (ลบตัวไฟล์)
+#   Default  : ติ๊กไว้ตั้งแต่เปิดโปรแกรม
+#   Quick    : รวมอยู่ใน One-Click Quick Clean
+#   Services : Service ที่ต้องหยุดชั่วคราวระหว่างลบ
+#   Clean    : ScriptBlock ที่ใช้แทนการลบไฟล์ปกติ
+$steam = Get-SteamLibraries
+$cacheTargets = @(
+    @{ Name = "Windows Temp"; Icon = "🗂"; Default = $true; Quick = $true
+       Paths = @("$env:WINDIR\Temp") }
+    @{ Name = "User Temp"; Icon = "📁"; Default = $true; Quick = $true
+       Paths = @("$env:TEMP") }
+    @{ Name = "Windows Update Cache"; Icon = "🔄"; Default = $true; Quick = $true
+       Paths = @("$env:WINDIR\SoftwareDistribution\Download"); Services = @("wuauserv", "bits") }
+    @{ Name = "Delivery Optimization Cache"; Icon = "📦"
+       Paths = @("$env:WINDIR\ServiceProfiles\NetworkService\AppData\Local\Microsoft\Windows\DeliveryOptimization\Cache")
+       Services = @("DoSvc") }
+    @{ Name = "Windows Error Reports"; Icon = "🐞"
+       Paths = @("$env:ProgramData\Microsoft\Windows\WER\ReportArchive", "$env:ProgramData\Microsoft\Windows\WER\ReportQueue") }
+    @{ Name = "Crash Dumps"; Icon = "💥"
+       Paths = @("$env:WINDIR\Minidump", "$env:WINDIR\MEMORY.DMP", "$env:LOCALAPPDATA\CrashDumps") }
+    @{ Name = "Recycle Bin"; Icon = "🗑"
+       Paths = @("$env:SystemDrive\`$Recycle.Bin")
+       Clean = { Clear-RecycleBin -Force -ErrorAction SilentlyContinue } }
+    @{ Name = "DirectX Shader Cache"; Icon = "🖼"
+       Paths = @("$env:LOCALAPPDATA\D3DSCache") }
+    @{ Name = "NVIDIA Shader Cache"; Icon = "🟢"
+       Paths = @("$env:ProgramData\NVIDIA Corporation\NV_Cache", "$env:LOCALAPPDATA\NVIDIA\DXCache", "$env:LOCALAPPDATA\NVIDIA\GLCache") }
+    @{ Name = "AMD Shader Cache"; Icon = "🔴"
+       Paths = @("$env:ProgramData\AMD\DxCache", "$env:LOCALAPPDATA\AMD\DxCache", "$env:LOCALAPPDATA\AMD\DxcCache", "$env:LOCALAPPDATA\AMD\VkCache") }
+    @{ Name = "Steam Shader Cache"; Icon = "🎮"
+       Paths = @($steam.Libraries | ForEach-Object { Join-Path $_ "steamapps\shadercache" }) }
+    @{ Name = "Steam Downloading Cache"; Icon = "⬇"
+       Paths = @($steam.Libraries | ForEach-Object { Join-Path $_ "steamapps\downloading" }) }
+    @{ Name = "Steam HTML Cache"; Icon = "🌐"
+       Paths = @("$env:LOCALAPPDATA\Steam\htmlcache") }
 )
+
+foreach ($t in $cacheTargets) {
+    $chk = New-Object System.Windows.Controls.CheckBox
+    $chk.Content   = "$($t.Icon)  $($t.Name)"
+    $chk.IsChecked = [bool]$t.Default
+    $chk.ToolTip   = ($t.Paths -join "`n")
+    [void]$pnlCacheTargets.Children.Add($chk)
+    $t.Chk = $chk
+}
 
 function Write-CleanupResult {
     param([string]$Name, [hashtable]$Result)
@@ -725,16 +787,8 @@ function Write-CleanupResult {
     }
 }
 
-$scanOnlyTargets = @(
-    @{ Name = "Steam Shader Cache";   Path = "C:\Program Files (x86)\Steam\steamapps\shadercache" }
-    @{ Name = "Steam Download Cache"; Path = "C:\Program Files (x86)\Steam\steamapps\downloading" }
-    @{ Name = "Steam HTML Cache";     Path = "$env:LOCALAPPDATA\Steam\htmlcache" }
-    @{ Name = "NVIDIA Shader Cache";  Path = "C:\ProgramData\NVIDIA Corporation\NV_Cache" }
-    @{ Name = "AMD DirectX Cache";    Path = "C:\ProgramData\AMD\DxCache" }
-    @{ Name = "Windows Temp";         Path = "$env:WINDIR\Temp" }
-    @{ Name = "User Temp";            Path = "$env:TEMP" }
-    @{ Name = "Windows Update Cache"; Path = "$env:WINDIR\SoftwareDistribution\Download" }
-    @{ Name = "Windows.old";          Path = "C:\Windows.old" }
+$scanOnlyTargets = @($cacheTargets) + @(
+    @{ Name = "Windows.old"; Paths = @("$env:SystemDrive\Windows.old") }
 )
 
 # ============================================================
@@ -750,7 +804,8 @@ $btnScanAll.Add_Click({
 
     $total = 0
     foreach ($t in $scanOnlyTargets) {
-        $size = Get-FolderSizeGB -Path $t.Path
+        Set-Status "กำลังสแกน $($t.Name)..." "Orange" $true
+        $size = Get-TargetSizeGB $t
         $total += $size
         if ($size -gt 1)       { $col = "#EF4444" }
         elseif ($size -gt 0.1) { $col = "#F59E0B" }
@@ -772,7 +827,7 @@ $btnScanAll.Add_Click({
 # ACTION: Clean Selected
 # ============================================================
 $btnCleanSelected.Add_Click({
-    $selected = @($allCacheTargets | Where-Object { $_.Chk.IsChecked -eq $true })
+    $selected = @($cacheTargets | Where-Object { $_.Chk.IsChecked -eq $true })
     if ($selected.Count -eq 0) {
         [System.Windows.MessageBox]::Show("กรุณาเลือกอย่างน้อย 1 รายการก่อนครับ", "แจ้งเตือน",
             [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Information) | Out-Null
@@ -827,13 +882,8 @@ $btnQuickClean.Add_Click({
     Write-LogSection "⚡ Quick Clean"
     Write-Log "ล้างไฟล์ Temp และ Cache ที่ปลอดภัยทั้งหมด..." "#94A3B8"
 
-    $quickPaths = @(
-        @{ Name = "Windows Temp"; Path = "$env:WINDIR\Temp" }
-        @{ Name = "User Temp";    Path = "$env:TEMP" }
-        @{ Name = "Update Cache"; Path = "$env:WINDIR\SoftwareDistribution\Download"; Services = @("wuauserv", "bits") }
-    )
     $totalSaved = 0.0
-    foreach ($t in $quickPaths) {
+    foreach ($t in @($cacheTargets | Where-Object { $_.Quick })) {
         $r = Invoke-CacheCleanup -Target $t
         Write-CleanupResult -Name $t.Name -Result $r
         $totalSaved += $r.SavedGB
