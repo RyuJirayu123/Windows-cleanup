@@ -22,8 +22,11 @@
 - 🎨 **Modern Dark UI** — ออกแบบด้วย WPF ธีมมืดสไตล์ Windows 11 Fluent Design สวยงามและอ่านง่าย
 - 📊 **Drive Status Bar** — แสดงพื้นที่ใช้งาน/ว่างของไดรฟ์ C: แบบ Real-time พร้อม Progress Bar
 - ⚡ **Quick Clean** — ล้างไฟล์ขยะที่ปลอดภัย (Temp + Windows Update Cache) ในคลิกเดียว
-- 🧹 **Custom Cache Manager** — เลือก Checkbox ได้ว่าต้องการล้างอะไร: Temp, Steam Cache, GPU Shader Cache ฯลฯ
-- ⚙️ **Deep System Clean** — เครื่องมือขั้นสูง: วิเคราะห์และล้าง WinSxS ด้วย DISM, ลบไดรเวอร์เก่าซ้ำซ้อน
+- 🧹 **Custom Cache Manager** — เลือก Checkbox ได้ว่าต้องการล้างอะไร: Temp, Delivery Optimization, Error Reports, Crash Dumps, Recycle Bin, Steam Cache, GPU Shader Cache (NVIDIA / AMD / DirectX)
+- 🎮 **ตรวจหา Steam อัตโนมัติ** — อ่านตำแหน่งติดตั้งจาก Registry และ Steam Library ทุกไดรฟ์ (เช่น `D:\SteamLibrary`)
+- 🔒 **ข้ามไฟล์ที่ถูกใช้งานอยู่** — ลบทีละไฟล์ แสดงพื้นที่ที่ได้คืนจริง และบอกจำนวนไฟล์ที่ถูกล็อก
+- ⚙️ **Deep System Clean** — วิเคราะห์และล้าง WinSxS ด้วย DISM (แสดงผลสดพร้อม % ความคืบหน้า หน้าต่างไม่ค้าง), ลบไดรเวอร์เก่าซ้ำซ้อนอย่างปลอดภัย
+- 🛡️ **ขอสิทธิ์ Admin อัตโนมัติ** — เปิดสคริปต์ได้เลย โปรแกรมจะถาม UAC ให้เอง
 - 🗃️ **Windows.old Remover** — ตรวจและลบโฟลเดอร์ Windows เวอร์ชันเก่าอย่างปลอดภัย
 - 🖥️ **Dark Terminal Output** — กล่อง Log แสดงผลสวยงาม พร้อมปุ่ม Copy และ Clear
 
@@ -33,11 +36,14 @@
 |---|---|---|
 | Windows Temp `%WINDIR%\Temp` | ✅ ปลอดภัยมาก | ไฟล์ชั่วคราว Windows สร้างใหม่ได้ |
 | User Temp `%TEMP%` | ✅ ปลอดภัยมาก | ไฟล์ชั่วคราวผู้ใช้ สร้างใหม่ได้ |
-| Windows Update Cache | ✅ ปลอดภัยมาก | ไฟล์ดาวน์โหลดอัปเดต ดาวน์โหลดใหม่ได้ |
+| Windows Update Cache | ✅ ปลอดภัยมาก | ไฟล์ดาวน์โหลดอัปเดต ดาวน์โหลดใหม่ได้ (หยุด Service ชั่วคราวระหว่างลบ) |
+| Delivery Optimization Cache | ✅ ปลอดภัยมาก | ไฟล์อัปเดตที่แชร์ระหว่างเครื่อง ดาวน์โหลดใหม่ได้ |
+| Windows Error Reports / Crash Dumps | ✅ ปลอดภัย | ใช้วิเคราะห์ปัญหาเท่านั้น ถ้าไม่ได้ debug อยู่ลบได้ |
+| Recycle Bin | ⚠️ ระมัดระวัง | ลบไฟล์ในถังขยะทุกไดรฟ์ถาวร |
 | Steam Shader/HTML Cache | ✅ ปลอดภัย | Steam สร้างใหม่โดยอัตโนมัติ (เกมอาจโหลดช้าครั้งแรก) |
-| NVIDIA/AMD Shader Cache | ✅ ปลอดภัย | GPU สร้าง Cache ใหม่โดยอัตโนมัติ |
+| NVIDIA/AMD/DirectX Shader Cache | ✅ ปลอดภัย | GPU สร้าง Cache ใหม่โดยอัตโนมัติ |
 | WinSxS (DISM Cleanup) | ⚠️ ระมัดระวัง | ใช้ DISM อย่างเป็นทางการ ปลอดภัยแต่ใช้เวลานาน |
-| Duplicate Drivers | ⚠️ ระมัดระวัง | ลบเฉพาะเวอร์ชันเก่า เก็บใหม่สุดไว้ |
+| Duplicate Drivers | ⚠️ ระมัดระวัง | ลบเฉพาะเวอร์ชันเก่า เก็บเวอร์ชันใหม่สุดไว้ และข้ามไดรเวอร์ที่อุปกรณ์ยังใช้งานอยู่ |
 | Windows.old | ❌ ถาวร | ลบแล้วไม่สามารถ Rollback ได้ |
 
 ### 🚀 วิธีใช้งาน
@@ -47,10 +53,21 @@
 2. กด **"ใช่"** หรือ **"Yes"** เมื่อ Windows ถามสิทธิ์ Admin
 3. กดปุ่ม **⚡ Quick Clean** เพื่อล้างแบบเร็วและปลอดภัย — เสร็จ! 🎉
 
+> 💡 อยากได้ไอคอนบน Desktop? ดับเบิลคลิก **`SetupShortcut.bat`** ครั้งเดียว จะได้ Shortcut พร้อมไอคอนและตั้งค่า Run as Administrator ให้
+
 #### สำหรับผู้ใช้ขั้นสูง
 1. เปิดโปรแกรม → กด **"สแกนดูพื้นที่ Cache"** ดูก่อนว่ามีอะไรให้ล้างบ้าง
 2. ติ๊ก Checkbox เลือกสิ่งที่ต้องการล้าง → กด **"ล้างที่เลือก"**
 3. (ตัวเลือก) Deep Clean: เช็ค WinSxS → ล้าง DISM → เช็ค Driver → ลบ Driver ซ้ำ
+
+### ➕ เพิ่มรายการ Cache ใหม่
+
+แก้ตาราง `$cacheTargets` ใน `DiskCleanupApp.ps1` เพียงที่เดียว — Checkbox, การสแกน และการล้างจะใช้รายการใหม่ทันที
+
+```powershell
+@{ Name = "My App Cache"; Icon = "🧩"
+   Paths = @("$env:LOCALAPPDATA\MyApp\Cache") }
+```
 
 ### 📋 ความต้องการระบบ
 
@@ -65,6 +82,10 @@
 windows-cleanup-toolkit/
 ├── DiskCleanupApp.ps1      # สคริปต์หลัก WPF UI
 ├── OpenDiskCleanupApp.bat  # ตัวเปิดโปรแกรม (ดับเบิลคลิกได้เลย)
+├── SetupShortcut.bat       # สร้าง Shortcut บน Desktop (รันครั้งเดียว)
+├── CreateShortcut.ps1      # สคริปต์ที่ SetupShortcut.bat เรียกใช้ (แปลงไอคอน + สร้าง .lnk)
+├── icon_source.jpg         # ภาพต้นฉบับของไอคอน
+├── icon.ico                # ไอคอนที่แปลงแล้ว (256/64/48/32/16 px)
 ├── README.md               # คู่มือนี้
 └── LICENSE                 # MIT License
 ```
@@ -78,8 +99,11 @@ windows-cleanup-toolkit/
 - 🎨 **Modern Dark UI** — WPF-based Windows 11 Fluent Design dark dashboard
 - 📊 **Real-time Drive Status** — C: drive usage bar with live percentage
 - ⚡ **One-Click Quick Clean** — safely clears Temp files & Update cache instantly
-- 🧹 **Custom Cache Manager** — checkbox selection for Steam, GPU caches, Temp, Update
-- ⚙️ **Deep System Clean** — DISM WinSxS analysis/cleanup + duplicate driver removal
+- 🧹 **Custom Cache Manager** — checkbox selection for Temp, Update, Delivery Optimization, error reports, crash dumps, Recycle Bin, Steam and GPU shader caches
+- 🎮 **Steam auto-detection** — finds the Steam install via the registry and every library folder on any drive
+- 🔒 **Locked-file aware** — deletes item by item, reports real freed space and how many files were in use
+- ⚙️ **Deep System Clean** — DISM WinSxS analysis/cleanup with live output and a progress bar (no frozen window) + safe duplicate driver removal
+- 🛡️ **Auto elevation** — run the script directly; it asks for UAC itself
 - 🗃️ **Windows.old Remover** — safely detects and removes old Windows installations
 - 🖥️ **Dark Terminal Output** — color-coded log with Copy & Clear buttons
 
@@ -101,8 +125,12 @@ windows-cleanup-toolkit/
 Pull requests are welcome! For major changes, please open an issue first to discuss what you'd like to change.
 
 1. Fork this repository
-2. Create your feature branch: `git checkout -b feature/my-feature`
-3. Commit your changes: `git commit -m "Add some feature"`
+2. Create a branch per change:
+   - new feature → `feature/<short-name>`
+   - bug fix → `fix/<short-name>`
+3. Commit using a prefix:
+   - `feat: <what the user gets>` — explain the feature in the commit body
+   - `fix: <what was broken>` — explain the cause and the fix in the commit body
 4. Push to the branch: `git push origin feature/my-feature`
 5. Open a Pull Request
 
@@ -117,4 +145,3 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 <div align="center">
 Made with ❤️ for Windows users who love a clean system.
 </div>
-# Windows-cleanup
