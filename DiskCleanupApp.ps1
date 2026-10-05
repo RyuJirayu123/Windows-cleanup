@@ -589,6 +589,67 @@ function Write-Log {
     [System.Windows.Forms.Application]::DoEvents()
 }
 
+function Set-ProgressPercent {
+    param([double]$Percent)
+    $window.Dispatcher.Invoke({
+        $progressBar.IsIndeterminate = $false
+        $progressBar.Value = $Percent
+    })
+}
+
+# รันโปรแกรมภายนอก (เช่น DISM) แบบไม่ทำให้หน้าต่างค้าง
+# - แสดง output ทีละบรรทัดทันทีที่ได้รับ
+# - บรรทัด progress ของ DISM "[=== 42.0% ===]" จะแสดงที่ progress bar แทนการพิมพ์ซ้ำ ๆ ใน Log
+function Invoke-LiveCommand {
+    param(
+        [string]$FilePath,
+        [string]$Arguments,
+        [scriptblock]$ColorOf = { "#94A3B8" }
+    )
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName               = $FilePath
+    $psi.Arguments              = $Arguments
+    $psi.UseShellExecute        = $false
+    $psi.CreateNoWindow         = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.StandardOutputEncoding = [Console]::OutputEncoding
+    $psi.StandardErrorEncoding  = [Console]::OutputEncoding
+
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+    } catch {
+        Write-Log "❌ เริ่ม $FilePath ไม่สำเร็จ: $_" "#EF4444"
+        return -1
+    }
+
+    $errTask  = $proc.StandardError.ReadToEndAsync()
+    $lineTask = $proc.StandardOutput.ReadLineAsync()
+    while ($true) {
+        if (-not $lineTask.Wait(50)) {
+            [System.Windows.Forms.Application]::DoEvents()
+            continue
+        }
+        $line = $lineTask.Result
+        if ($null -eq $line) { break }
+        $lineTask = $proc.StandardOutput.ReadLineAsync()
+
+        if ($line -match '^\s*\[[=\s]*(\d+(?:\.\d+)?)%[=\s]*\]\s*$') {
+            Set-ProgressPercent ([double]$Matches[1])
+            [System.Windows.Forms.Application]::DoEvents()
+        } elseif ($line.Trim()) {
+            Write-Log $line (& $ColorOf $line)
+        }
+    }
+    $proc.WaitForExit()
+    foreach ($line in ($errTask.Result -split "`r?`n" | Where-Object { $_.Trim() })) {
+        Write-Log $line "#EF4444"
+    }
+    $code = $proc.ExitCode
+    $proc.Dispose()
+    return $code
+}
+
 function Write-LogSection {
     param([string]$Title)
     Write-Log ""
@@ -603,6 +664,7 @@ function Clear-Log {
 
 function Set-AllButtons {
     param([bool]$Enabled)
+    $script:isBusy = -not $Enabled
     $window.Dispatcher.Invoke({
         foreach ($btn in @($btnQuickClean,$btnScanAll,$btnCleanSelected,$btnCheckWinsxs,
                            $btnCleanWinsxs,$btnCheckDriver,$btnCleanDriver,
@@ -794,15 +856,16 @@ $btnCheckWinsxs.Add_Click({
     Write-LogSection "WinSxS Component Store Analysis"
     Write-Log "กำลังรัน DISM /AnalyzeComponentStore..." "#64748B"
 
-    $result = dism.exe /online /Cleanup-Image /AnalyzeComponentStore 2>&1
-    foreach ($line in $result) {
-        $col = if ($line -match "ข้อผิดพลาด|Error") { "#EF4444" } else { "#94A3B8" }
-        Write-Log $line $col
-    }
+    [void](Invoke-LiveCommand "dism.exe" "/online /Cleanup-Image /AnalyzeComponentStore" -ColorOf {
+        param($line)
+        if ($line -match "ข้อผิดพลาด|Error") { "#EF4444" }
+        elseif ($line -match "Recommended\s*:\s*Yes|แนะนำ.*:\s*ใช่") { "#F59E0B" }
+        else { "#94A3B8" }
+    })
 
     Write-LogSection "System Restore (Shadow Copy)"
-    $vss = vssadmin list shadowstorage 2>&1
-    foreach ($line in $vss) { Write-Log $line "#94A3B8" }
+    Set-Status "กำลังเช็ค Shadow Copy..." "Orange" $true
+    [void](Invoke-LiveCommand "vssadmin.exe" "list shadowstorage")
 
     Write-LogSection "Windows Installer Cache"
     $installerGB = Get-FolderSizeGB "C:\Windows\Installer"
@@ -829,18 +892,22 @@ $btnCleanWinsxs.Add_Click({
     Write-LogSection "DISM StartComponentCleanup"
     Write-Log "กำลังรัน DISM... กรุณารอ ห้ามปิดโปรแกรม" "#F59E0B"
 
-    $result = dism.exe /online /Cleanup-Image /StartComponentCleanup 2>&1
-    foreach ($line in $result) {
-        $col = if ($line -match "ข้อผิดพลาด|Error") { "#EF4444" }
-               elseif ($line -match "สำเร็จ|Success|100") { "#22C55E" }
-               else { "#94A3B8" }
-        Write-Log $line $col
+    $exitCode = Invoke-LiveCommand "dism.exe" "/online /Cleanup-Image /StartComponentCleanup" -ColorOf {
+        param($line)
+        if ($line -match "ข้อผิดพลาด|Error") { "#EF4444" }
+        elseif ($line -match "สำเร็จ|success") { "#22C55E" }
+        else { "#94A3B8" }
     }
     Write-Log ""
-    Write-Log "✅ DISM Cleanup เสร็จสิ้น" "#22C55E"
+    if ($exitCode -eq 0) {
+        Write-Log "✅ DISM Cleanup เสร็จสิ้น" "#22C55E"
+        Set-Status "ล้าง WinSxS เสร็จแล้ว" "Green" $false
+    } else {
+        Write-Log "❌ DISM จบการทำงานด้วยรหัส $exitCode — ดูรายละเอียดใน C:\Windows\Logs\DISM\dism.log" "#EF4444"
+        Set-Status "DISM ล้มเหลว (รหัส $exitCode)" "Red" $false
+    }
 
     Set-AllButtons $true
-    Set-Status "ล้าง WinSxS เสร็จแล้ว" "Green" $false
     Update-DriveInfo
 })
 
@@ -1014,6 +1081,20 @@ $btnClearLog.Add_Click({ Clear-Log })
 # ACTION: Close
 # ============================================================
 $btnClose.Add_Click({ $window.Close() })
+
+# กันการปิดหน้าต่างระหว่างที่ DISM / การลบไฟล์กำลังทำงาน
+$script:isBusy = $false
+$window.Add_Closing({
+    param($s, $e)
+    if ($script:isBusy) {
+        $e.Cancel = $true
+        [System.Windows.MessageBox]::Show(
+            "กำลังทำงานอยู่ กรุณารอให้เสร็จก่อนปิดโปรแกรม",
+            "กรุณารอสักครู่",
+            [System.Windows.MessageBoxButton]::OK,
+            [System.Windows.MessageBoxImage]::Information) | Out-Null
+    }
+})
 
 # ============================================================
 # WELCOME MESSAGE
